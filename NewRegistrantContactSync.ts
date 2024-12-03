@@ -18,11 +18,11 @@ function getLastLookbackDate(): Date {
     return lastDateString && new Date(lastDateString);
 }
 
-function getLookbackStart(): Date {
+function getLookbackStart(useMaxLookback: boolean): Date {
     const lastDate = getLastLookbackDate();
     const maxLookback = new Date(new Date().setDate(new Date().getDate() - Settings.MAX_LOOKBACK_DAYS));
 
-    return lastDate < maxLookback ? maxLookback : lastDate;
+    return (useMaxLookback || lastDate < maxLookback) ? maxLookback : lastDate;
 }
 
 function getRequiredProp(propName: string) {
@@ -93,13 +93,21 @@ function extractFormField(form: string[], field: string, lines = 1): string {
 function extractContactFromMessage(message: GoogleAppsScript.Gmail.GmailMessage): Contact {
     const formBody = message.getPlainBody().split('\n');
 
-    const [ givenName, lastName ] = extractFormField(formBody, "Your Name").split(' ');
-    return {
-        givenName, lastName,
-        email: extractFormField(formBody, "Email"),
-        phoneNumber: extractFormField(formBody, "Mobile Phone"),
-        address: extractFormField(formBody, "Address", 3),
-        studentName: extractFormField(formBody, "Student's First and Last Name"),
+    let contact = null;
+    try {
+        const [ givenName, lastName ] = extractFormField(formBody, "Your Name").split(' ');
+        contact = {
+            givenName, lastName,
+            email: extractFormField(formBody, "Email"),
+            phoneNumber: extractFormField(formBody, "Mobile Phone"),
+            address: extractFormField(formBody, "Address", 3),
+            studentName: extractFormField(formBody, "Student's First and Last Name"),
+        }
+
+    } catch (e) {
+        console.error(`Encountered error parsing message, skipping (message id: ${message.getId()}, message date: ${message.getDate().toString()})\n${e}`);
+    } finally {
+        return contact;
     }
 }
 
@@ -126,14 +134,18 @@ function createMissingContacts(contacts: Contact[]) {
 
 function onTimeTrigger() {
     console.log(`Time trigger started`);
-    onTrigger();
+    syncNewEntries();
 }
 
 function onTrigger() {
+    syncNewEntries(true);
+}
+
+function syncNewEntries(useMaxLookback = false) {
     console.log(`Starting New Registrant Contact Sync script with properties:`);
     console.log(`   ${JSON.stringify(PropertiesService.getScriptProperties().getProperties())}`);
 
-    const start = getLookbackStart();
+    const start = getLookbackStart(useMaxLookback);
     console.log(`Looking back at new emails since: ${start.toString()}`);
 
     const messages = getTargetEmailsAfter(start);
@@ -143,7 +155,7 @@ function onTrigger() {
         updateLastLookbackDate(new Date(messages[0].getDate().toString()))
     }
 
-    const contacts = messages.map(m => extractContactFromMessage(m));
+    const contacts = messages.map(m => extractContactFromMessage(m)).filter(c => c !== null);
     const createdContacts = createMissingContacts(contacts);
 
     console.log(`Added ${createdContacts.length} new contacts ${createdContacts.map(c => c.email).join(', ')}`);
